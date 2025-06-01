@@ -1,0 +1,6 @@
+sqlalchemy
+psycopg2-binary
+ttkbootstrap
+fastapi
+uvicorn
+requests

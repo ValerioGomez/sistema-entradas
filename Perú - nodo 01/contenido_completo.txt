@@ -1,0 +1,859 @@
+=========================================== 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\api_server.py ==== 
+from fastapi import FastAPI
+from services import crud
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+@app.get("/api/eventos")
+def get_eventos():
+    eventos = crud.listar_eventos()
+    return [{
+        "id": e.id,
+        "nombre_evento": e.nombre_evento,
+        "descripcion": e.descripcion,
+        "fecha_evento": e.fecha_evento.isoformat(),
+        "lugar": e.lugar,
+        "precio": float(e.precio),
+        "aforo": e.aforo
+    } for e in eventos]
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\database.py ==== 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+import json
+
+with open("services/config.json") as f:
+    config = json.load(f)
+
+DATABASE_URL = config["db_url"]
+
+engine = create_engine(DATABASE_URL, echo=False)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\main.py ==== 
+import tkinter as tk
+from ttkbootstrap import Style
+from ttkbootstrap.widgets import Frame, Label, Entry, Button, Combobox
+from services import crud
+from tkinter import messagebox
+import threading
+from sync_manager import sincronizar_datos_periodicamente
+
+# Funciones
+
+def agregar_usuario():
+    nombre = entry_nombre.get()
+    email = entry_email.get()
+    if nombre and email:
+        try:
+            crud.crear_usuario(nombre, email)
+            messagebox.showinfo("Éxito", "Usuario agregado")
+            listar_usuarios_en_gui()
+            cargar_usuarios_en_combo()  # actualizar combo de usuarios para compra
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+    else:
+        messagebox.showerror("Error", "Campos vacíos")
+
+def listar_usuarios_en_gui():
+    lista_usuarios.delete(0, tk.END)
+    usuarios = crud.listar_usuarios()
+    for u in usuarios:
+        lista_usuarios.insert(tk.END, f"{u.id} - {u.nombre} - {u.email}")
+
+def cargar_conciertos():
+    conciertos = crud.listar_eventos()
+    nombres_conciertos = [c.nombre_evento for c in conciertos]
+    combo_conciertos['values'] = nombres_conciertos
+    if nombres_conciertos:
+        combo_conciertos.current(0)  # seleccionar primero por defecto
+
+def cargar_usuarios_en_combo():
+    usuarios = crud.listar_usuarios()
+    opciones = [f"{u.id} - {u.nombre}" for u in usuarios]
+    combo_usuarios_compra['values'] = opciones
+    if opciones:
+        combo_usuarios_compra.current(0)
+
+def comprar_entrada():
+    seleccion_usuario = combo_usuarios_compra.get()
+    concierto_nombre = combo_conciertos.get()
+    cantidad = entry_compra_cantidad.get()
+
+    if not seleccion_usuario or not concierto_nombre or not cantidad:
+        messagebox.showerror("Error", "Complete todos los campos para la compra")
+        return
+
+    try:
+        cantidad_int = int(cantidad)
+        if cantidad_int <= 0:
+            raise ValueError
+    except ValueError:
+        messagebox.showerror("Error", "Cantidad debe ser un número entero positivo")
+        return
+
+    try:
+        usuario_id = int(seleccion_usuario.split(" - ")[0])  # obtener id usuario
+        eventos = crud.listar_eventos()
+        evento_id = None
+        for e in eventos:
+            if e.nombre_evento == concierto_nombre:
+                evento_id = e.id
+                break
+
+        if evento_id is None:
+            messagebox.showerror("Error", "Evento no encontrado")
+            return
+
+        crud.comprar_entradas(usuario_id, evento_id, cantidad_int)
+        messagebox.showinfo("Éxito", "Compra registrada")
+
+        # Limpiar campo cantidad
+        entry_compra_cantidad.delete(0, tk.END)
+
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
+
+
+# Configuración ventana principal
+
+app = tk.Tk()
+app.title("Sistema Distribuido de Compra de Entradas")
+app.geometry("750x450")
+
+titulo = tk.Label(app, text="TeleBoletos - Perú", font=("Helvetica", 20, "bold"), fg="#2c3e50")
+titulo.pack(pady=10)
+
+style = Style("flatly")
+
+frame = Frame(app, padding=15)
+frame.pack(expand=True, fill="both")
+
+# --- Sección Usuarios ---
+Label(frame, text="Agregar Usuario", font=("Helvetica", 14, "bold")).grid(row=0, column=0, columnspan=2, pady=(0,10))
+
+Label(frame, text="Nombre:").grid(row=1, column=0, sticky="e")
+entry_nombre = Entry(frame)
+entry_nombre.grid(row=1, column=1)
+
+Label(frame, text="Email:").grid(row=2, column=0, sticky="e")
+entry_email = Entry(frame)
+entry_email.grid(row=2, column=1)
+
+btn_agregar = Button(frame, text="Agregar Usuario", command=agregar_usuario)
+btn_agregar.grid(row=3, column=0, columnspan=2, pady=10)
+
+Label(frame, text="Usuarios:", font=("Helvetica", 12, "bold")).grid(row=4, column=0, sticky="w", pady=(10,0))
+lista_usuarios = tk.Listbox(frame, height=8, width=40)
+lista_usuarios.grid(row=5, column=0, columnspan=2, sticky="w")
+
+listar_usuarios_en_gui()
+
+# --- Sección Compra de Entradas ---
+Label(frame, text="Comprar Entradas", font=("Helvetica", 14, "bold")).grid(row=0, column=3, columnspan=2, pady=(0,10), padx=(40,0))
+
+Label(frame, text="Usuario:").grid(row=1, column=3, sticky="e", padx=(40,0))
+combo_usuarios_compra = Combobox(frame, state="readonly")
+combo_usuarios_compra.grid(row=1, column=4)
+
+Label(frame, text="Concierto:").grid(row=2, column=3, sticky="e", padx=(40,0))
+combo_conciertos = Combobox(frame, state="readonly")
+combo_conciertos.grid(row=2, column=4)
+
+Label(frame, text="Cantidad:").grid(row=3, column=3, sticky="e", padx=(40,0))
+entry_compra_cantidad = Entry(frame)
+entry_compra_cantidad.grid(row=3, column=4)
+
+btn_comprar = Button(frame, text="Comprar", command=comprar_entrada)
+btn_comprar.grid(row=4, column=3, columnspan=2, pady=10, padx=(40,0))
+
+# Cargar datos iniciales
+cargar_conciertos()
+cargar_usuarios_en_combo()
+
+# Iniciar sincronización en segundo plano (si tienes esa función)
+threading.Thread(target=sincronizar_datos_periodicamente, daemon=True).start()
+
+app.mainloop()
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\main2.py ==== 
+import tkinter as tk
+from ttkbootstrap import Style
+from ttkbootstrap.widgets import Frame, Label, Entry, Button, Combobox
+from services import crud
+from tkinter import messagebox
+import threading
+from sync_manager import sincronizar_datos_periodicamente
+
+def agregar_usuario():
+    nombre = entry_nombre.get()
+    email = entry_email.get()
+    if nombre and email:
+        try:
+            crud.crear_usuario(nombre, email)
+            messagebox.showinfo("Éxito", "Usuario agregado")
+            listar_usuarios_en_gui()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+    else:
+        messagebox.showerror("Error", "Campos vacíos")
+
+def listar_usuarios_en_gui():
+    lista_usuarios.delete(0, tk.END)
+    usuarios = crud.listar_usuarios()
+    for u in usuarios:
+        lista_usuarios.insert(tk.END, f"{u.id} - {u.nombre} - {u.email}")
+
+def cargar_conciertos():
+    conciertos = crud.listar_eventos()
+    nombres_conciertos = [c.nombre_evento for c in conciertos]
+    combo_conciertos['values'] = nombres_conciertos
+    if nombres_conciertos:
+        combo_conciertos.current(0)  # seleccionar el primero por defecto
+
+def comprar_entrada():
+    nombre = entry_compra_nombre.get()
+    email = entry_compra_email.get()
+    cantidad = entry_compra_cantidad.get()
+    concierto_nombre = combo_conciertos.get()
+
+    if not nombre or not email or not cantidad or not concierto_nombre:
+        messagebox.showerror("Error", "Complete todos los campos para la compra")
+        return
+    
+    try:
+        cantidad_int = int(cantidad)
+        if cantidad_int <= 0:
+            raise ValueError
+    except ValueError:
+        messagebox.showerror("Error", "Cantidad debe ser un número entero positivo")
+        return
+
+    try:
+        # Opción 1: Si tu crud.crear_compra acepta solo nombre concierto (string)
+        crud.crear_compra(nombre, email, concierto_nombre, cantidad_int)
+        messagebox.showinfo("Éxito", "Compra registrada")
+        # Limpiar campos compra
+        entry_compra_nombre.delete(0, tk.END)
+        entry_compra_email.delete(0, tk.END)
+        entry_compra_cantidad.delete(0, tk.END)
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
+
+app = tk.Tk()
+app.title("Sistema Distribuido de Compra de Entradas")
+app.geometry("700x450")
+
+style = Style("flatly")
+
+frame = Frame(app, padding=15)
+frame.pack(expand=True, fill="both")
+
+# --- Sección Usuarios ---
+Label(frame, text="Agregar Usuario", font=("Helvetica", 14, "bold")).grid(row=0, column=0, columnspan=2, pady=(0,10))
+
+Label(frame, text="Nombre:").grid(row=1, column=0, sticky="e")
+entry_nombre = Entry(frame)
+entry_nombre.grid(row=1, column=1)
+
+Label(frame, text="Email:").grid(row=2, column=0, sticky="e")
+entry_email = Entry(frame)
+entry_email.grid(row=2, column=1)
+
+btn_agregar = Button(frame, text="Agregar Usuario", command=agregar_usuario)
+btn_agregar.grid(row=3, column=0, columnspan=2, pady=10)
+
+Label(frame, text="Usuarios:", font=("Helvetica", 12, "bold")).grid(row=4, column=0, sticky="w", pady=(10,0))
+lista_usuarios = tk.Listbox(frame, height=8, width=40)
+lista_usuarios.grid(row=5, column=0, columnspan=2, sticky="w")
+
+listar_usuarios_en_gui()
+
+# --- Sección Compra de Entradas ---
+Label(frame, text="Comprar Entradas", font=("Helvetica", 14, "bold")).grid(row=0, column=3, columnspan=2, pady=(0,10), padx=(40,0))
+
+Label(frame, text="Nombre:").grid(row=1, column=3, sticky="e", padx=(40,0))
+entry_compra_nombre = Entry(frame)
+entry_compra_nombre.grid(row=1, column=4)
+
+Label(frame, text="Email:").grid(row=2, column=3, sticky="e", padx=(40,0))
+entry_compra_email = Entry(frame)
+entry_compra_email.grid(row=2, column=4)
+
+Label(frame, text="Concierto:").grid(row=3, column=3, sticky="e", padx=(40,0))
+combo_conciertos = Combobox(frame, state="readonly")
+combo_conciertos.grid(row=3, column=4)
+
+Label(frame, text="Cantidad:").grid(row=4, column=3, sticky="e", padx=(40,0))
+entry_compra_cantidad = Entry(frame)
+entry_compra_cantidad.grid(row=4, column=4)
+
+btn_comprar = Button(frame, text="Comprar", command=comprar_entrada)
+btn_comprar.grid(row=5, column=3, columnspan=2, pady=10, padx=(40,0))
+
+# Cargar conciertos disponibles
+cargar_conciertos()
+
+# Iniciar sincronización en segundo plano
+threading.Thread(target=sincronizar_datos_periodicamente, daemon=True).start()
+
+app.mainloop()
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\sync_manager.py ==== 
+import requests
+import time
+from services import crud
+import json
+
+with open("services/config.json") as f:
+    config = json.load(f)
+
+NODOS = config.get("nodos", [])
+
+def sincronizar_datos():
+    for nodo in NODOS:
+        try:
+            url = f"http://{nodo}/api/eventos"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                eventos_remotos = resp.json()
+                for ev in eventos_remotos:
+                    try:
+                        # Insertar evento solo si no existe (ejemplo simple)
+                        crud.crear_evento(
+                            ev['nombre_evento'],
+                            ev.get('descripcion', ''),
+                            ev['fecha_evento'],
+                            ev.get('lugar', ''),
+                            ev['precio'],
+                            ev['aforo']
+                        )
+                    except Exception:
+                        # Si ya existe, ignorar o actualizar (según lógica)
+                        pass
+        except Exception as e:
+            print(f"No se pudo conectar con nodo {nodo}: {e}")
+
+def sincronizar_datos_periodicamente(interval=60):
+    while True:
+        sincronizar_datos()
+        time.sleep(interval)
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\contenido_completo.txt ==== 
+=========================================== 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\api_server.py ==== 
+from fastapi import FastAPI
+from services import crud
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+@app.get("/api/eventos")
+def get_eventos():
+    eventos = crud.listar_eventos()
+    return [{
+        "id": e.id,
+        "nombre_evento": e.nombre_evento,
+        "descripcion": e.descripcion,
+        "fecha_evento": e.fecha_evento.isoformat(),
+        "lugar": e.lugar,
+        "precio": float(e.precio),
+        "aforo": e.aforo
+    } for e in eventos]
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\database.py ==== 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+import json
+
+with open("services/config.json") as f:
+    config = json.load(f)
+
+DATABASE_URL = config["db_url"]
+
+engine = create_engine(DATABASE_URL, echo=False)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\main.py ==== 
+import tkinter as tk
+from ttkbootstrap import Style
+from ttkbootstrap.widgets import Frame, Label, Entry, Button, Combobox
+from services import crud
+from tkinter import messagebox
+import threading
+from sync_manager import sincronizar_datos_periodicamente
+
+# Funciones
+
+def agregar_usuario():
+    nombre = entry_nombre.get()
+    email = entry_email.get()
+    if nombre and email:
+        try:
+            crud.crear_usuario(nombre, email)
+            messagebox.showinfo("Éxito", "Usuario agregado")
+            listar_usuarios_en_gui()
+            cargar_usuarios_en_combo()  # actualizar combo de usuarios para compra
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+    else:
+        messagebox.showerror("Error", "Campos vacíos")
+
+def listar_usuarios_en_gui():
+    lista_usuarios.delete(0, tk.END)
+    usuarios = crud.listar_usuarios()
+    for u in usuarios:
+        lista_usuarios.insert(tk.END, f"{u.id} - {u.nombre} - {u.email}")
+
+def cargar_conciertos():
+    conciertos = crud.listar_eventos()
+    nombres_conciertos = [c.nombre_evento for c in conciertos]
+    combo_conciertos['values'] = nombres_conciertos
+    if nombres_conciertos:
+        combo_conciertos.current(0)  # seleccionar primero por defecto
+
+def cargar_usuarios_en_combo():
+    usuarios = crud.listar_usuarios()
+    opciones = [f"{u.id} - {u.nombre}" for u in usuarios]
+    combo_usuarios_compra['values'] = opciones
+    if opciones:
+        combo_usuarios_compra.current(0)
+
+def comprar_entrada():
+    seleccion_usuario = combo_usuarios_compra.get()
+    concierto_nombre = combo_conciertos.get()
+    cantidad = entry_compra_cantidad.get()
+
+    if not seleccion_usuario or not concierto_nombre or not cantidad:
+        messagebox.showerror("Error", "Complete todos los campos para la compra")
+        return
+
+    try:
+        cantidad_int = int(cantidad)
+        if cantidad_int <= 0:
+            raise ValueError
+    except ValueError:
+        messagebox.showerror("Error", "Cantidad debe ser un número entero positivo")
+        return
+
+    try:
+        usuario_id = int(seleccion_usuario.split(" - ")[0])  # obtener id usuario
+        eventos = crud.listar_eventos()
+        evento_id = None
+        for e in eventos:
+            if e.nombre_evento == concierto_nombre:
+                evento_id = e.id
+                break
+
+        if evento_id is None:
+            messagebox.showerror("Error", "Evento no encontrado")
+            return
+
+        crud.comprar_entradas(usuario_id, evento_id, cantidad_int)
+        messagebox.showinfo("Éxito", "Compra registrada")
+
+        # Limpiar campo cantidad
+        entry_compra_cantidad.delete(0, tk.END)
+
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
+
+
+# Configuración ventana principal
+
+app = tk.Tk()
+app.title("Sistema Distribuido de Compra de Entradas")
+app.geometry("750x450")
+
+titulo = tk.Label(app, text="TeleBoletos - Perú", font=("Helvetica", 20, "bold"), fg="#2c3e50")
+titulo.pack(pady=10)
+
+style = Style("flatly")
+
+frame = Frame(app, padding=15)
+frame.pack(expand=True, fill="both")
+
+# --- Sección Usuarios ---
+Label(frame, text="Agregar Usuario", font=("Helvetica", 14, "bold")).grid(row=0, column=0, columnspan=2, pady=(0,10))
+
+Label(frame, text="Nombre:").grid(row=1, column=0, sticky="e")
+entry_nombre = Entry(frame)
+entry_nombre.grid(row=1, column=1)
+
+Label(frame, text="Email:").grid(row=2, column=0, sticky="e")
+entry_email = Entry(frame)
+entry_email.grid(row=2, column=1)
+
+btn_agregar = Button(frame, text="Agregar Usuario", command=agregar_usuario)
+btn_agregar.grid(row=3, column=0, columnspan=2, pady=10)
+
+Label(frame, text="Usuarios:", font=("Helvetica", 12, "bold")).grid(row=4, column=0, sticky="w", pady=(10,0))
+lista_usuarios = tk.Listbox(frame, height=8, width=40)
+lista_usuarios.grid(row=5, column=0, columnspan=2, sticky="w")
+
+listar_usuarios_en_gui()
+
+# --- Sección Compra de Entradas ---
+Label(frame, text="Comprar Entradas", font=("Helvetica", 14, "bold")).grid(row=0, column=3, columnspan=2, pady=(0,10), padx=(40,0))
+
+Label(frame, text="Usuario:").grid(row=1, column=3, sticky="e", padx=(40,0))
+combo_usuarios_compra = Combobox(frame, state="readonly")
+combo_usuarios_compra.grid(row=1, column=4)
+
+Label(frame, text="Concierto:").grid(row=2, column=3, sticky="e", padx=(40,0))
+combo_conciertos = Combobox(frame, state="readonly")
+combo_conciertos.grid(row=2, column=4)
+
+Label(frame, text="Cantidad:").grid(row=3, column=3, sticky="e", padx=(40,0))
+entry_compra_cantidad = Entry(frame)
+entry_compra_cantidad.grid(row=3, column=4)
+
+btn_comprar = Button(frame, text="Comprar", command=comprar_entrada)
+btn_comprar.grid(row=4, column=3, columnspan=2, pady=10, padx=(40,0))
+
+# Cargar datos iniciales
+cargar_conciertos()
+cargar_usuarios_en_combo()
+
+# Iniciar sincronización en segundo plano (si tienes esa función)
+threading.Thread(target=sincronizar_datos_periodicamente, daemon=True).start()
+
+app.mainloop()
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\main2.py ==== 
+import tkinter as tk
+from ttkbootstrap import Style
+from ttkbootstrap.widgets import Frame, Label, Entry, Button, Combobox
+from services import crud
+from tkinter import messagebox
+import threading
+from sync_manager import sincronizar_datos_periodicamente
+
+def agregar_usuario():
+    nombre = entry_nombre.get()
+    email = entry_email.get()
+    if nombre and email:
+        try:
+            crud.crear_usuario(nombre, email)
+            messagebox.showinfo("Éxito", "Usuario agregado")
+            listar_usuarios_en_gui()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+    else:
+        messagebox.showerror("Error", "Campos vacíos")
+
+def listar_usuarios_en_gui():
+    lista_usuarios.delete(0, tk.END)
+    usuarios = crud.listar_usuarios()
+    for u in usuarios:
+        lista_usuarios.insert(tk.END, f"{u.id} - {u.nombre} - {u.email}")
+
+def cargar_conciertos():
+    conciertos = crud.listar_eventos()
+    nombres_conciertos = [c.nombre_evento for c in conciertos]
+    combo_conciertos['values'] = nombres_conciertos
+    if nombres_conciertos:
+        combo_conciertos.current(0)  # seleccionar el primero por defecto
+
+def comprar_entrada():
+    nombre = entry_compra_nombre.get()
+    email = entry_compra_email.get()
+    cantidad = entry_compra_cantidad.get()
+    concierto_nombre = combo_conciertos.get()
+
+    if not nombre or not email or not cantidad or not concierto_nombre:
+        messagebox.showerror("Error", "Complete todos los campos para la compra")
+        return
+    
+    try:
+        cantidad_int = int(cantidad)
+        if cantidad_int <= 0:
+            raise ValueError
+    except ValueError:
+        messagebox.showerror("Error", "Cantidad debe ser un número entero positivo")
+        return
+
+    try:
+        # Opción 1: Si tu crud.crear_compra acepta solo nombre concierto (string)
+        crud.crear_compra(nombre, email, concierto_nombre, cantidad_int)
+        messagebox.showinfo("Éxito", "Compra registrada")
+        # Limpiar campos compra
+        entry_compra_nombre.delete(0, tk.END)
+        entry_compra_email.delete(0, tk.END)
+        entry_compra_cantidad.delete(0, tk.END)
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
+
+app = tk.Tk()
+app.title("Sistema Distribuido de Compra de Entradas")
+app.geometry("700x450")
+
+style = Style("flatly")
+
+frame = Frame(app, padding=15)
+frame.pack(expand=True, fill="both")
+
+# --- Sección Usuarios ---
+Label(frame, text="Agregar Usuario", font=("Helvetica", 14, "bold")).grid(row=0, column=0, columnspan=2, pady=(0,10))
+
+Label(frame, text="Nombre:").grid(row=1, column=0, sticky="e")
+entry_nombre = Entry(frame)
+entry_nombre.grid(row=1, column=1)
+
+Label(frame, text="Email:").grid(row=2, column=0, sticky="e")
+entry_email = Entry(frame)
+entry_email.grid(row=2, column=1)
+
+btn_agregar = Button(frame, text="Agregar Usuario", command=agregar_usuario)
+btn_agregar.grid(row=3, column=0, columnspan=2, pady=10)
+
+Label(frame, text="Usuarios:", font=("Helvetica", 12, "bold")).grid(row=4, column=0, sticky="w", pady=(10,0))
+lista_usuarios = tk.Listbox(frame, height=8, width=40)
+lista_usuarios.grid(row=5, column=0, columnspan=2, sticky="w")
+
+listar_usuarios_en_gui()
+
+# --- Sección Compra de Entradas ---
+Label(frame, text="Comprar Entradas", font=("Helvetica", 14, "bold")).grid(row=0, column=3, columnspan=2, pady=(0,10), padx=(40,0))
+
+Label(frame, text="Nombre:").grid(row=1, column=3, sticky="e", padx=(40,0))
+entry_compra_nombre = Entry(frame)
+entry_compra_nombre.grid(row=1, column=4)
+
+Label(frame, text="Email:").grid(row=2, column=3, sticky="e", padx=(40,0))
+entry_compra_email = Entry(frame)
+entry_compra_email.grid(row=2, column=4)
+
+Label(frame, text="Concierto:").grid(row=3, column=3, sticky="e", padx=(40,0))
+combo_conciertos = Combobox(frame, state="readonly")
+combo_conciertos.grid(row=3, column=4)
+
+Label(frame, text="Cantidad:").grid(row=4, column=3, sticky="e", padx=(40,0))
+entry_compra_cantidad = Entry(frame)
+entry_compra_cantidad.grid(row=4, column=4)
+
+btn_comprar = Button(frame, text="Comprar", command=comprar_entrada)
+btn_comprar.grid(row=5, column=3, columnspan=2, pady=10, padx=(40,0))
+
+# Cargar conciertos disponibles
+cargar_conciertos()
+
+# Iniciar sincronización en segundo plano
+threading.Thread(target=sincronizar_datos_periodicamente, daemon=True).start()
+
+app.mainloop()
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\sync_manager.py ==== 
+import requests
+import time
+from services import crud
+import json
+
+with open("services/config.json") as f:
+    config = json.load(f)
+
+NODOS = config.get("nodos", [])
+
+def sincronizar_datos():
+    for nodo in NODOS:
+        try:
+            url = f"http://{nodo}/api/eventos"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                eventos_remotos = resp.json()
+                for ev in eventos_remotos:
+                    try:
+                        # Insertar evento solo si no existe (ejemplo simple)
+                        crud.crear_evento(
+                            ev['nombre_evento'],
+                            ev.get('descripcion', ''),
+                            ev['fecha_evento'],
+                            ev.get('lugar', ''),
+                            ev['precio'],
+                            ev['aforo']
+                        )
+                    except Exception:
+                        # Si ya existe, ignorar o actualizar (según lógica)
+                        pass
+        except Exception as e:
+            print(f"No se pudo conectar con nodo {nodo}: {e}")
+
+def sincronizar_datos_periodicamente(interval=60):
+    while True:
+        sincronizar_datos()
+        time.sleep(interval)
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\contenido_completo.txt ==== 
+=========================================== 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\api_server.py ==== 
+from fastapi import FastAPI
+from services import crud
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+@app.get("/api/eventos")
+def get_eventos():
+    eventos =  
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\ejecujtar.txt ==== 
+python -m pip install -r requirements.txt
+
+
+uvicorn api_server:app --host 0.0.0.0 --port 8000
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\requirements.txt ==== 
+sqlalchemy
+psycopg2-binary
+ttkbootstrap
+fastapi
+uvicorn
+requests
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\services\crud.py ==== 
+from .models import Usuario, Evento, Entrada
+from database import SessionLocal
+
+def crear_usuario(nombre, email):
+    session = SessionLocal()
+    try:
+        usuario = Usuario(nombre=nombre, email=email)
+        session.add(usuario)
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise e
+    finally:
+        session.close()
+
+def listar_usuarios():
+    session = SessionLocal()
+    usuarios = session.query(Usuario).all()
+    session.close()
+    return usuarios
+
+def crear_evento(nombre_evento, descripcion, fecha_evento, lugar, precio, aforo):
+    session = SessionLocal()
+    try:
+        evento = Evento(
+            nombre_evento=nombre_evento,
+            descripcion=descripcion,
+            fecha_evento=fecha_evento,
+            lugar=lugar,
+            precio=precio,
+            aforo=aforo
+        )
+        session.add(evento)
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise e
+    finally:
+        session.close()
+
+def listar_eventos():
+    session = SessionLocal()
+    eventos = session.query(Evento).all()
+    session.close()
+    return eventos
+
+def obtener_evento_por_nombre(nombre_evento):
+    session = SessionLocal()
+    evento = session.query(Evento).filter(Evento.nombre_evento == nombre_evento).first()
+    session.close()
+    return evento
+
+def comprar_entradas(usuario_id, evento_id, cantidad):
+    session = SessionLocal()
+    try:
+        evento = session.query(Evento).filter(Evento.id == evento_id).first()
+        if not evento:
+            raise Exception("Evento no encontrado")
+        if cantidad <= 0:
+            raise Exception("Cantidad inválida")
+        total = evento.precio * cantidad
+
+        entrada = Entrada(
+            usuario_id=usuario_id,
+            evento_id=evento_id,
+            cantidad=cantidad,
+            total_pagado=total
+        )
+        session.add(entrada)
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise e
+    finally:
+        session.close()
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\services\models.py ==== 
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, Integer, String, Date, Text, DECIMAL, ForeignKey, TIMESTAMP
+from sqlalchemy.orm import relationship
+import datetime
+
+Base = declarative_base()
+
+class Usuario(Base):
+    __tablename__ = "usuarios"
+    id = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String(100), nullable=False)
+    email = Column(String(100), nullable=False, unique=True)
+    fecha_registro = Column(TIMESTAMP, default=datetime.datetime.now)
+
+    entradas = relationship("Entrada", back_populates="usuario")  # Relación opcional
+
+class Evento(Base):
+    __tablename__ = "eventos"
+    id = Column(Integer, primary_key=True)
+    nombre_evento = Column(String(150), nullable=False)
+    descripcion = Column(Text)
+    fecha_evento = Column(Date, nullable=False)
+    lugar = Column(String(150))
+    precio = Column(DECIMAL(10,2), nullable=False)
+    aforo = Column(Integer, nullable=False)
+
+    entradas = relationship("Entrada", back_populates="evento")  # Relación opcional
+
+class Entrada(Base):
+    __tablename__ = "entradas"
+    id = Column(Integer, primary_key=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id", ondelete="CASCADE"), nullable=False)
+    evento_id = Column(Integer, ForeignKey("eventos.id", ondelete="CASCADE"), nullable=False)
+    cantidad = Column(Integer, nullable=False)
+    total_pagado = Column(DECIMAL(10,2), nullable=False)
+    fecha_compra = Column(TIMESTAMP, default=datetime.datetime.now)
+
+    usuario = relationship("Usuario", back_populates="entradas")
+    evento = relationship("Evento", back_populates="entradas")
+ 
+==== C:\Users\vales\Desktop\Nueva carpeta\sistema_distribuido\services\config.json ==== 
+{
+  "region": "PERU",
+  "db_url": "postgresql://postgres:admin@localhost:5432/compra_entradas",
+  "nodos": ["192.168.1.12:8000"]
+}
+ 

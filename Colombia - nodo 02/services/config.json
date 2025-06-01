@@ -1,0 +1,5 @@
+{
+  "region": "PERU",
+  "db_url": "postgresql://postgres:admin@localhost:5432/compra_entradas",
+  "nodos": ["192.168.1.12:8000"]
+}
